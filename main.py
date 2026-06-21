@@ -4,8 +4,12 @@ from discord.ext import commands
 from aiohttp import web
 from dotenv import load_dotenv
 import datetime
+import logging
 
-# تحميل المتغيرات البيئية
+# إعداد نظام تسجيل السجلات لمراقبة الأخطاء في Render بدقة
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("GestaxNotifier")
+
 load_dotenv()
 
 TOKEN = os.getenv("NOTIFIER_BOT_TOKEN")
@@ -13,81 +17,122 @@ EMAIL_CHANNEL_ID = int(os.getenv("CHANNEL_EMAIL_ID", 0))
 INSTAGRAM_CHANNEL_ID = int(os.getenv("CHANNEL_INSTAGRAM_ID", 0))
 FACEBOOK_CHANNEL_ID = int(os.getenv("CHANNEL_FACEBOOK_ID", 0))
 
-# إعدادات ديسكورد
 intents = discord.Intents.default()
+intents.message_content = True  
 bot = commands.Bot(command_prefix="?", intents=intents)
 
 RTL = "\u202b"
 WIDTH_HACK = "\u2800" * 45  
 
+# دالة آمنة لجلب القنوات لتفادي مشاكل الـ Cache في ديسكورد
+async def safely_get_channel(channel_id):
+    if not channel_id:
+        return None
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception as e:
+            logger.error(f"⚠️ فشل جلب القناة {channel_id} من ديسكورد: {e}")
+            return None
+    return channel
+
 # --------------------------------------------------------
-# 🌐 محرك الويب (API) لاستقبال البيانات من Make.com
+# 🌐 مستقبل الويب هوك الاحترافي (API Endpoint)
 # --------------------------------------------------------
 async def handle_webhook(request):
     try:
-        source = request.match_info.get('source')
-        data = await request.json()
+        source = request.match_info.get('source', '').lower()
+        
+        # التأكد من صحة البيانات القادمة وتجنب انهيار السيرفر لو كانت فارغة
+        try:
+            data = await request.json()
+        except Exception:
+            logger.warning("❌ تم استقبال طلب بجسم بيانات (Body) غير صالح أو ليس JSON")
+            return web.json_response({"status": "error", "message": "Invalid JSON"}, status=400)
         
         if not bot.is_ready():
-            return web.Response(text="Bot is booting up...", status=503)
+            return web.json_response({"status": "retry", "message": "Bot is booting up..."}, status=503)
 
-        if source == "email" and EMAIL_CHANNEL_ID:
-            channel = bot.get_channel(EMAIL_CHANNEL_ID)
+        logger.info(f"📥 تم استقبال إشعار جديد من المصدر: {source}")
+
+        # --- 1. معالجة إشعارات البريد الإلكتروني ---
+        if source == "email":
+            channel = await safely_get_channel(EMAIL_CHANNEL_ID)
             if channel:
+                subject = data.get('subject', 'بدون عنوان').strip() or 'بدون عنوان'
+                sender = data.get('sender', 'غير معروف').strip() or 'غير معروف'
+                snippet = data.get('snippet', 'لا يوجد محتوى معاينة').strip() or 'لا يوجد محتوى معاينة'
+
                 embed = discord.Embed(
-                    title=f"📬 إيميل جديد | {data.get('subject', 'بدون عنوان')}",
-                    description=f"**{RTL}👤 من:** {data.get('sender', 'غير معروف')}\n\n**{RTL}📝 المحتوى:**\n{RTL}{data.get('snippet', '')}",
+                    title=f"📬 إيميل جديد | {subject}",
+                    description=f"**{RTL}👤 من:** {sender}\n\n**{RTL}📝 المحتوى:**\n{RTL}{snippet}",
                     color=0xEA4335,
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
                 embed.set_footer(text=f"Gestax Mail System{WIDTH_HACK}")
                 await channel.send(embed=embed)
-                
-        elif source == "instagram" and INSTAGRAM_CHANNEL_ID:
-            channel = bot.get_channel(INSTAGRAM_CHANNEL_ID)
+                return web.json_response({"status": "success"}, status=200)
+
+        # --- 2. معالجة إشعارات إنستغرام ---
+        elif source == "instagram":
+            channel = await safely_get_channel(INSTAGRAM_CHANNEL_ID)
             if channel:
+                caption = data.get('caption', 'منشور جديد بدون نص').strip() or 'منشور جديد بدون نص'
+                post_url = data.get('url', '').strip()
+                image_url = data.get('image_url', '').strip()
+
                 embed = discord.Embed(
                     title="📸 منشور إنستغرام جديد",
-                    description=f"{RTL}{data.get('caption', '')}\n\n🔗 [عرض المنشور]({data.get('url', '')})",
+                    description=f"{RTL}{caption}" + (f"\n\n🔗 [عرض المنشور]({post_url})" if post_url else ""),
                     color=0xE1306C,
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
-                if data.get("image_url"): embed.set_image(url=data.get("image_url"))
+                if image_url and image_url.startswith("http"):
+                    embed.set_image(url=image_url)
                 embed.set_footer(text=f"Gestax Instagram Monitor{WIDTH_HACK}")
                 await channel.send(embed=embed)
-                
-        elif source == "facebook" and FACEBOOK_CHANNEL_ID:
-            channel = bot.get_channel(FACEBOOK_CHANNEL_ID)
+                return web.json_response({"status": "success"}, status=200)
+
+        # --- 3. معالجة إشعارات فيسبوك ---
+        elif source == "facebook":
+            channel = await safely_get_channel(FACEBOOK_CHANNEL_ID)
             if channel:
+                message = data.get('message', 'منشور جديد بدون نص').strip() or 'منشور جديد بدون نص'
+                post_url = data.get('url', '').strip()
+                image_url = data.get('image_url', '').strip()
+
                 embed = discord.Embed(
                     title="🔵 منشور فيسبوك جديد",
-                    description=f"{RTL}{data.get('message', '')}\n\n🔗 [عرض المنشور]({data.get('url', '')})",
+                    description=f"{RTL}{message}" + (f"\n\n🔗 [عرض المنشور]({post_url})" if post_url else ""),
                     color=0x1877F2,
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
-                if data.get("image_url"): embed.set_image(url=data.get("image_url"))
+                if image_url and image_url.startswith("http"):
+                    embed.set_image(url=image_url)
                 embed.set_footer(text=f"Gestax Facebook Monitor{WIDTH_HACK}")
                 await channel.send(embed=embed)
-        else:
-            return web.Response(text="Source unknown or channel not set.", status=400)
-            
-        return web.Response(text="Success", status=200)
-        
+                return web.json_response({"status": "success"}, status=200)
+
+        # إذا كان المصدر غير معروف أو القناة لم يتم تحديدها في .env
+        logger.warning(f"⚠️ مصدر غير معروف أو قناة غير مهيأة للمصدر: {source}")
+        return web.json_response({"status": "ignored", "message": "Source unknown or channel configuration missing"}, status=400)
+
     except Exception as e:
-        print(f"❌ Webhook Error: {e}")
-        return web.Response(text="Internal Error", status=500)
+        logger.error(f"❌ خطأ حرج غير متوقع داخل الـ Webhook Handler: {e}", exc_info=True)
+        return web.json_response({"status": "error", "message": "Internal Server Error"}, status=500)
 
 async def start_web_server():
     app = web.Application()
     app.router.add_post('/webhook/{source}', handle_webhook)
-    app.router.add_get('/', lambda r: web.Response(text="Gestax API is Alive! 🚀"))
+    app.router.add_get('/', lambda r: web.Response(text="Gestax API Gateway is fully operational! 🚀", status=200))
     
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"🌐 [API] يعمل على المنفذ {port}")
+    logger.info(f"🌐 [API SERVER] يعمل بنجاح على المنفذ السحابي {port}")
 
 async def setup_hook():
     bot.loop.create_task(start_web_server())
@@ -96,6 +141,10 @@ bot.setup_hook = setup_hook
 
 @bot.event
 async def on_ready():
-    print(f"🔥 بوت الإشعارات أونلاين: {bot.user}")
+    logger.info(f"🔥 تم تسجيل الدخول بنجاح! البوت أونلاين: {bot.user}")
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    if not TOKEN:
+        logger.critical("❌ خطأ: لم يتم العثور على NOTIFIER_BOT_TOKEN في متغيرات البيئة!")
+    else:
+        bot.run(TOKEN)
