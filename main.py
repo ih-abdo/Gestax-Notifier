@@ -125,7 +125,7 @@ async def handle_webhook(request):
                 )
                 if image_url and image_url.startswith("http"):
                     embed.set_image(url=image_url)
-                embed.set_footer(text=f"Gestax Instagram Monitor{WIDTH_HACK}")
+                embed.set_footer(text=f"{LRM}Gestax Instagram Monitor{LRM}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
@@ -145,7 +145,7 @@ async def handle_webhook(request):
                 )
                 if image_url and image_url.startswith("http"):
                     embed.set_image(url=image_url)
-                embed.set_footer(text=f"Gestax Facebook Monitor{WIDTH_HACK}")
+                embed.set_footer(text=f"{LRM}Gestax Facebook Monitor{LRM}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
