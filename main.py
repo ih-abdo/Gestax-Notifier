@@ -23,6 +23,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="?", intents=intents)
 
 RTL = "\u202b"
+LRM = "\u200E"
 WIDTH_HACK = "\u2800" * 45  
 
 def detect_rtl(text):
@@ -104,7 +105,7 @@ async def handle_webhook(request):
                     inline=False
                 )
 
-                embed.set_footer(text=f"Gestax Mail System")
+                embed.set_footer(text=f"{LRM}Gestax Mail System{LRM}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
