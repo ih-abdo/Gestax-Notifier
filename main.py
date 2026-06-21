@@ -104,7 +104,7 @@ async def handle_webhook(request):
                     inline=False
                 )
 
-                embed.set_footer(text=f"Gestax Mail System{WIDTH_HACK}")
+                embed.set_footer(text=f"Gestax Mail System")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
