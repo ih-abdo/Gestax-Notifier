@@ -1,4 +1,5 @@
 import os
+import re
 import discord
 from discord.ext import commands
 from aiohttp import web
@@ -23,6 +24,13 @@ bot = commands.Bot(command_prefix="?", intents=intents)
 
 RTL = "\u202b"
 WIDTH_HACK = "\u2800" * 45  
+
+def detect_rtl(text):
+    """تفحص الدالة ما إذا كان النص يحتوي على حروف عربية لتحديد اتجاه القراءة الصحيح في ديسكورد"""
+    if re.search(r'[\u0600-\u06FF]', text):
+        return "\u200F"  # رمز (Right-to-Left Mark) لإجبار ديسكورد على بدء السطر من اليمين
+    return ""  # نص فارغ إذا كانت الرسالة إنجليزية بالكامل
+
 
 # دالة آمنة لجلب القنوات لتفادي مشاكل الـ Cache في ديسكورد
 async def safely_get_channel(channel_id):
@@ -64,12 +72,38 @@ async def handle_webhook(request):
                 sender = data.get('sender', 'غير معروف').strip() or 'غير معروف'
                 snippet = data.get('snippet', 'لا يوجد محتوى معاينة').strip() or 'لا يوجد محتوى معاينة'
 
+                # الفحص التلقائي الذكي للغة لتحديد اتجاه النصوص
+                email_rtl = detect_rtl(snippet)
+                subject_rtl = detect_rtl(subject)
+
+                # تصميم هندسي منظم يفصل البيانات لسهولة القراءة
                 embed = discord.Embed(
-                    title=f"📬 إيميل جديد | {subject}",
-                    description=f"**{RTL}👤 من:** {sender}\n\n**{RTL}📝 المحتوى:**\n{RTL}{snippet}",
-                    color=0xEA4335,
+                    title="📬 إشعار بريد إلكتروني جديد",
+                    color=0xEA4335,  # لون Gmail الأحمر الرسمي
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
+                
+                # حقل المرسل: معزول داخل كود بلوك لحماية بنية الاسم والإيميل من التداخل
+                embed.add_field(
+                    name="👤 المُرْسِل", 
+                    value=f"`{sender}`", 
+                    inline=False
+                )
+                
+                # حقل العنوان (مع فحص لغوي)
+                embed.add_field(
+                    name="📌 الموضوع", 
+                    value=f"**{subject_rtl}{subject}**", 
+                    inline=False
+                )
+                
+                # حقل المحتوى (مع فحص لغوي واقتباس عمودي جمالي)
+                embed.add_field(
+                    name="📝 نص الرسالة", 
+                    value=f"> {email_rtl}{snippet}", 
+                    inline=False
+                )
+
                 embed.set_footer(text=f"Gestax Mail System{WIDTH_HACK}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
