@@ -19,6 +19,10 @@ EMAIL_CHANNEL_ID = int(os.getenv("CHANNEL_EMAIL_ID", 0))
 INSTAGRAM_CHANNEL_ID = int(os.getenv("CHANNEL_INSTAGRAM_ID", 0))
 FACEBOOK_CHANNEL_ID = int(os.getenv("CHANNEL_FACEBOOK_ID", 0))
 
+# القنوات الجديدة المخصصة لإرسال المحاضر والإعلانات
+MEETINGS_CHANNEL_ID = int(os.getenv("CHANNEL_MEETINGS_ID", 0))
+ANNOUNCEMENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ANNOUNCEMENTS_ID", 0))
+
 intents = discord.Intents.default()
 intents.message_content = True  
 bot = commands.Bot(command_prefix="?", intents=intents)
@@ -66,7 +70,15 @@ class MeetingModal(ui.Modal, title='📝 كتابة محضر اجتماع جدي
         embed.add_field(name="👥 الحضور", value=f"> {self.attendees.value}", inline=False)
         embed.add_field(name="📌 تفاصيل وقرارات الاجتماع", value=f"```\n{self.decisions.value}\n```", inline=False)
         embed.set_footer(text=f"كُتب بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-        await interaction.response.send_message(embed=embed)
+        
+        # جلب القناة المخصصة للمحاضر وإرسال الرسالة إليها
+        channel = await safely_get_channel(MEETINGS_CHANNEL_ID)
+        if channel:
+            await channel.send(embed=embed)
+            # الرد على المستخدم برسالة مخفية لتأكيد الإرسال
+            await interaction.response.send_message("✅ تم إرسال محضر الاجتماع إلى القناة المخصصة بنجاح.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ لم يتم العثور على القناة المخصصة لمحاضر الاجتماعات. يرجى التحقق من إعدادات ملف .env.", ephemeral=True)
 
 class MeetingView(ui.View):
     def __init__(self):
@@ -101,12 +113,18 @@ class AnnouncementModal(ui.Modal, title='📢 نشر إعلان جديد للف�
         embed.add_field(name="⚠️ الأهمية", value=f"`{urgency_val}`", inline=False)
         embed.set_footer(text=f"إدارة الفريق | بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
         
-        # استخدام allowed_mentions لضمان المنشن الآمن
-        await interaction.response.send_message(
-            content="||@everyone||" if is_urgent else None, 
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(everyone=is_urgent)
-        )
+        # جلب القناة المخصصة للإعلانات وإرسال الرسالة إليها
+        channel = await safely_get_channel(ANNOUNCEMENTS_CHANNEL_ID)
+        if channel:
+            await channel.send(
+                content="||@everyone||" if is_urgent else None, 
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=is_urgent)
+            )
+            # الرد على المستخدم برسالة مخفية لتأكيد الإرسال
+            await interaction.response.send_message("✅ تم نشر الإعلان في القناة المخصصة بنجاح.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ لم يتم العثور على القناة المخصصة للإعلانات. يرجى التحقق من إعدادات ملف .env.", ephemeral=True)
 
 class AnnouncementView(ui.View):
     def __init__(self):
@@ -124,7 +142,7 @@ class AnnouncementView(ui.View):
 async def setup_meetings_slash(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📝 نظام إدارة محاضر الاجتماعات",
-        description="اضغط على الزر أدناه لتعبئة نموذج محضر اجتماع جديد.\nسيتم نشر المحضر تلقائياً في هذه القناة فور اعتماده.",
+        description="اضغط على الزر أدناه لتعبئة نموذج محضر اجتماع جديد.\nسيتم نشر المحضر تلقائياً في القناة المخصصة فور اعتماده.",
         color=0x2C3E50
     )
     await interaction.channel.send(embed=embed, view=MeetingView())
@@ -135,7 +153,7 @@ async def setup_meetings_slash(interaction: discord.Interaction):
 async def setup_announcements_slash(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📢 لوحة إعلانات الفريق",
-        description="اضغط على الزر أدناه لكتابة ونشر إعلان جديد للفريق.\nالرجاء التأكد من صحة المعلومات قبل النشر.",
+        description="اضغط على الزر أدناه لكتابة ونشر إعلان جديد للفريق.\nسيتم نشر الإعلان في القناة المخصصة.",
         color=0xF39C12
     )
     await interaction.channel.send(embed=embed, view=AnnouncementView())
