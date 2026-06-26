@@ -91,18 +91,21 @@ class MeetingView(ui.View):
 # ========================================================
 # 📢 واجهات إعلانات الفريق
 # ========================================================
-class AnnouncementModal(ui.Modal, title='📢 نشر إعلان جديد للفريق'):
+class AnnouncementModal(ui.Modal):
     announcement_title = ui.TextInput(label='عنوان الإعلان', style=discord.TextStyle.short, required=True, max_length=100)
-    urgency = ui.TextInput(label='مستوى الأهمية (عادي / عاجل / حرج)', default='عادي', style=discord.TextStyle.short, required=True, max_length=20)
     details = ui.TextInput(label='تفاصيل الإعلان', style=discord.TextStyle.paragraph, required=True, max_length=3000)
+
+    # استقبال مستوى الأهمية الذي اختاره المستخدم من القائمة المنسدلة
+    def __init__(self, urgency_val: str):
+        super().__init__(title=f'📢 نشر إعلان جديد ({urgency_val})')
+        self.urgency_val = urgency_val
 
     async def on_submit(self, interaction: discord.Interaction):
         color = 0xF1C40F 
-        urgency_val = self.urgency.value.strip()
-        is_urgent = "عاجل" in urgency_val or "حرج" in urgency_val
+        is_urgent = "عاجل" in self.urgency_val or "حرج" in self.urgency_val
         
-        if "عاجل" in urgency_val: color = 0xE67E22 
-        elif "حرج" in urgency_val: color = 0xE74C3C 
+        if "عاجل" in self.urgency_val: color = 0xE67E22 
+        elif "حرج" in self.urgency_val: color = 0xE74C3C 
 
         embed = discord.Embed(
             title=f"📢 إعلان إداري: {self.announcement_title.value}",
@@ -110,7 +113,7 @@ class AnnouncementModal(ui.Modal, title='📢 نشر إعلان جديد للف�
             color=color,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
-        embed.add_field(name="⚠️ الأهمية", value=f"`{urgency_val}`", inline=False)
+        embed.add_field(name="⚠️ الأهمية", value=f"`{self.urgency_val}`", inline=False)
         embed.set_footer(text=f"إدارة الفريق | بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
         
         # جلب القناة المخصصة للإعلانات وإرسال الرسالة إليها
@@ -130,9 +133,22 @@ class AnnouncementView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @ui.button(label="نشر إعلان جديد 📢", style=discord.ButtonStyle.success, custom_id="btn_create_announcement")
-    async def create_announcement(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(AnnouncementModal())
+    # استبدال الزر بقائمة منسدلة (خيارات إجبارية)
+    @ui.select(
+        placeholder="اختر مستوى أهمية الإعلان أولاً ⬇️",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="عادي", description="إعلان روتيني غير مستعجل", emoji="🟢"),
+            discord.SelectOption(label="عاجل", description="إعلان هام يتطلب انتباه الجميع", emoji="🟠"),
+            discord.SelectOption(label="حرج", description="إعلان طارئ وحرج جداً", emoji="🔴")
+        ],
+        custom_id="select_announcement_urgency"
+    )
+    async def select_urgency(self, interaction: discord.Interaction, select: ui.Select):
+        selected_urgency = select.values[0]
+        # بمجرد الاختيار، يتم فتح نافذة الإعلان وتمرير الأهمية إليها
+        await interaction.response.send_modal(AnnouncementModal(urgency_val=selected_urgency))
 
 # ========================================================
 # 💻 أوامر السلاش (Slash Commands)
@@ -153,7 +169,7 @@ async def setup_meetings_slash(interaction: discord.Interaction):
 async def setup_announcements_slash(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📢 لوحة إعلانات الفريق",
-        description="اضغط على الزر أدناه لكتابة ونشر إعلان جديد للفريق.\nسيتم نشر الإعلان في القناة المخصصة.",
+        description="اختر مستوى أهمية الإعلان من القائمة المنسدلة أدناه للبدء.\nسيتم نشر الإعلان في القناة المخصصة فور الانتهاء.",
         color=0xF39C12
     )
     await interaction.channel.send(embed=embed, view=AnnouncementView())
