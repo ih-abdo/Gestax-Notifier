@@ -2,12 +2,13 @@ import os
 import re
 import discord
 from discord.ext import commands
+from discord import ui, app_commands
 from aiohttp import web
 from dotenv import load_dotenv
 import datetime
 import logging
 
-# إعداد نظام تسجيل السجلات لمراقبة الأخطاء في Render بدقة
+# إعداد نظام تسجيل السجلات
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("GestaxNotifier")
 
@@ -24,16 +25,18 @@ bot = commands.Bot(command_prefix="?", intents=intents)
 
 RTL = "\u202b"
 LRM = "\u200E"
-WIDTH_HACK = "\u2800" * 45  
 
 def detect_rtl(text):
-    """تفحص الدالة ما إذا كان النص يحتوي على حروف عربية لتحديد اتجاه القراءة الصحيح في ديسكورد"""
     if re.search(r'[\u0600-\u06FF]', text):
-        return "\u200F"  # رمز (Right-to-Left Mark) لإجبار ديسكورد على بدء السطر من اليمين
-    return ""  # نص فارغ إذا كانت الرسالة إنجليزية بالكامل
+        return "\u200F"
+    return ""
 
+def truncate_text(text, max_length):
+    """✂️ مقص ذكي لحماية البوت من الانهيار إذا تجاوز النص حدود ديسكورد المسموحة"""
+    if len(text) > max_length:
+        return text[:max_length - 3] + "..."
+    return text
 
-# دالة آمنة لجلب القنوات لتفادي مشاكل الـ Cache في ديسكورد
 async def safely_get_channel(channel_id):
     if not channel_id:
         return None
@@ -46,112 +49,155 @@ async def safely_get_channel(channel_id):
             return None
     return channel
 
-# --------------------------------------------------------
-# 🌐 مستقبل الويب هوك الاحترافي (API Endpoint)
-# --------------------------------------------------------
+# ========================================================
+# 📝 واجهات محضر الاجتماعات
+# ========================================================
+class MeetingModal(ui.Modal, title='📝 كتابة محضر اجتماع جديد'):
+    meeting_title = ui.TextInput(label='عنوان الاجتماع', style=discord.TextStyle.short, required=True, max_length=100)
+    attendees = ui.TextInput(label='الأعضاء الحاضرون', style=discord.TextStyle.short, required=True, max_length=1000)
+    decisions = ui.TextInput(label='القرارات والنقاط المطروحة', style=discord.TextStyle.paragraph, required=True, max_length=2000)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=f"📝 محضر اجتماع: {self.meeting_title.value}",
+            color=0x2E86C1, 
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.add_field(name="👥 الحضور", value=f"> {self.attendees.value}", inline=False)
+        embed.add_field(name="📌 تفاصيل وقرارات الاجتماع", value=f"```\n{self.decisions.value}\n```", inline=False)
+        embed.set_footer(text=f"كُتب بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
+class MeetingView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) 
+
+    @ui.button(label="إنشاء محضر اجتماع 📝", style=discord.ButtonStyle.primary, custom_id="btn_create_meeting")
+    async def create_meeting(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(MeetingModal())
+
+# ========================================================
+# 📢 واجهات إعلانات الفريق
+# ========================================================
+class AnnouncementModal(ui.Modal, title='📢 نشر إعلان جديد للفريق'):
+    announcement_title = ui.TextInput(label='عنوان الإعلان', style=discord.TextStyle.short, required=True, max_length=100)
+    urgency = ui.TextInput(label='مستوى الأهمية (عادي / عاجل / حرج)', default='عادي', style=discord.TextStyle.short, required=True, max_length=20)
+    details = ui.TextInput(label='تفاصيل الإعلان', style=discord.TextStyle.paragraph, required=True, max_length=3000)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        color = 0xF1C40F 
+        urgency_val = self.urgency.value.strip()
+        is_urgent = "عاجل" in urgency_val or "حرج" in urgency_val
+        
+        if "عاجل" in urgency_val: color = 0xE67E22 
+        elif "حرج" in urgency_val: color = 0xE74C3C 
+
+        embed = discord.Embed(
+            title=f"📢 إعلان إداري: {self.announcement_title.value}",
+            description=f"{RTL}{self.details.value}",
+            color=color,
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.add_field(name="⚠️ الأهمية", value=f"`{urgency_val}`", inline=False)
+        embed.set_footer(text=f"إدارة الفريق | بواسطة: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        
+        # استخدام allowed_mentions لضمان المنشن الآمن
+        await interaction.response.send_message(
+            content="||@everyone||" if is_urgent else None, 
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(everyone=is_urgent)
+        )
+
+class AnnouncementView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="نشر إعلان جديد 📢", style=discord.ButtonStyle.success, custom_id="btn_create_announcement")
+    async def create_announcement(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(AnnouncementModal())
+
+# ========================================================
+# 💻 أوامر السلاش (Slash Commands)
+# ========================================================
+@bot.tree.command(name="setup_meetings", description="نشر قائمة تدوين محاضر الاجتماعات (للمسؤولين فقط)")
+@app_commands.default_permissions(administrator=True)
+async def setup_meetings_slash(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📝 نظام إدارة محاضر الاجتماعات",
+        description="اضغط على الزر أدناه لتعبئة نموذج محضر اجتماع جديد.\nسيتم نشر المحضر تلقائياً في هذه القناة فور اعتماده.",
+        color=0x2C3E50
+    )
+    await interaction.channel.send(embed=embed, view=MeetingView())
+    await interaction.response.send_message("✅ تم نشر بوابة محاضر الاجتماعات بنجاح.", ephemeral=True)
+
+@bot.tree.command(name="setup_announcements", description="نشر لوحة إعلانات الفريق (للمسؤولين فقط)")
+@app_commands.default_permissions(administrator=True)
+async def setup_announcements_slash(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📢 لوحة إعلانات الفريق",
+        description="اضغط على الزر أدناه لكتابة ونشر إعلان جديد للفريق.\nالرجاء التأكد من صحة المعلومات قبل النشر.",
+        color=0xF39C12
+    )
+    await interaction.channel.send(embed=embed, view=AnnouncementView())
+    await interaction.response.send_message("✅ تم نشر بوابة الإعلانات الإدارية بنجاح.", ephemeral=True)
+
+# ========================================================
+# 🌐 مستقبل الويب هوك (API Endpoint)
+# ========================================================
 async def handle_webhook(request):
     try:
         source = request.match_info.get('source', '').lower()
-        
-        # التأكد من صحة البيانات القادمة وتجنب انهيار السيرفر لو كانت فارغة
         try:
             data = await request.json()
         except Exception:
-            logger.warning("❌ تم استقبال طلب بجسم بيانات (Body) غير صالح أو ليس JSON")
             return web.json_response({"status": "error", "message": "Invalid JSON"}, status=400)
         
         if not bot.is_ready():
             return web.json_response({"status": "retry", "message": "Bot is booting up..."}, status=503)
 
-        logger.info(f"📥 تم استقبال إشعار جديد من المصدر: {source}")
-
-        # --- 1. معالجة إشعارات البريد الإلكتروني ---
         if source == "email":
             channel = await safely_get_channel(EMAIL_CHANNEL_ID)
             if channel:
-                subject = data.get('subject', 'بدون عنوان').strip() or 'بدون عنوان'
-                sender = data.get('sender', 'غير معروف').strip() or 'غير معروف'
-                snippet = data.get('snippet', 'لا يوجد محتوى معاينة').strip() or 'لا يوجد محتوى معاينة'
+                # ✂️ الحماية من تجاوز حدود الـ Embed
+                subject = truncate_text(data.get('subject', 'بدون عنوان').strip() or 'بدون عنوان', 256)
+                sender = truncate_text(data.get('sender', 'غير معروف').strip() or 'غير معروف', 256)
+                snippet = truncate_text(data.get('snippet', 'لا يوجد محتوى').strip() or 'لا يوجد محتوى', 1000)
 
-                # الفحص التلقائي الذكي للغة لتحديد اتجاه النصوص
                 email_rtl = detect_rtl(snippet)
                 subject_rtl = detect_rtl(subject)
 
-                # تصميم هندسي منظم يفصل البيانات لسهولة القراءة
-                embed = discord.Embed(
-                    title="📬 إشعار بريد إلكتروني جديد",
-                    color=0xEA4335,  # لون Gmail الأحمر الرسمي
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-                
-                # حقل المرسل: معزول داخل كود بلوك لحماية بنية الاسم والإيميل من التداخل
-                embed.add_field(
-                    name="👤 المُرْسِل", 
-                    value=f"`{sender}`", 
-                    inline=False
-                )
-                
-                # حقل العنوان (مع فحص لغوي)
-                embed.add_field(
-                    name="📌 الموضوع", 
-                    value=f"**{subject_rtl}{subject}**", 
-                    inline=False
-                )
-                
-                # حقل المحتوى (مع فحص لغوي واقتباس عمودي جمالي)
-                embed.add_field(
-                    name="📝 نص الرسالة", 
-                    value=f"> {email_rtl}{snippet}", 
-                    inline=False
-                )
-
+                embed = discord.Embed(title="📬 إشعار بريد إلكتروني جديد", color=0xEA4335, timestamp=datetime.datetime.now(datetime.timezone.utc))
+                embed.add_field(name="👤 المُرْسِل", value=f"`{sender}`", inline=False)
+                embed.add_field(name="📌 الموضوع", value=f"**{subject_rtl}{subject}**", inline=False)
+                embed.add_field(name="📝 نص الرسالة", value=f"> {email_rtl}{snippet}", inline=False)
                 embed.set_footer(text=f"{LRM}Gestax Mail System{LRM}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
-        # --- 2. معالجة إشعارات إنستغرام ---
-        elif source == "instagram":
-            channel = await safely_get_channel(INSTAGRAM_CHANNEL_ID)
+        elif source == "instagram" or source == "facebook":
+            channel_id = INSTAGRAM_CHANNEL_ID if source == "instagram" else FACEBOOK_CHANNEL_ID
+            channel = await safely_get_channel(channel_id)
             if channel:
-                caption = data.get('caption', 'منشور جديد بدون نص').strip() or 'منشور جديد بدون نص'
+                # ✂️ الحماية من تجاوز الـ Description limit (4096)
+                raw_text = data.get('caption' if source == 'instagram' else 'message', 'منشور جديد بدون نص').strip() or 'منشور جديد بدون نص'
+                safe_text = truncate_text(raw_text, 3900) 
+                
                 post_url = data.get('url', '').strip()
                 image_url = data.get('image_url', '').strip()
 
                 embed = discord.Embed(
-                    title="📸 منشور إنستغرام جديد",
-                    description=f"{RTL}{caption}" + (f"\n\n🔗 [عرض المنشور]({post_url})" if post_url else ""),
-                    color=0xE1306C,
+                    title="📸 منشور إنستغرام جديد" if source == "instagram" else "🔵 منشور فيسبوك جديد",
+                    description=f"{RTL}{safe_text}" + (f"\n\n🔗 [عرض المنشور]({post_url})" if post_url else ""),
+                    color=0xE1306C if source == "instagram" else 0x1877F2,
                     timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
                 if image_url and image_url.startswith("http"):
                     embed.set_image(url=image_url)
-                embed.set_footer(text=f"{LRM}Gestax Instagram Monitor{LRM}")
+                embed.set_footer(text=f"{LRM}Gestax {source.capitalize()} Monitor{LRM}")
                 await channel.send(embed=embed)
                 return web.json_response({"status": "success"}, status=200)
 
-        # --- 3. معالجة إشعارات فيسبوك ---
-        elif source == "facebook":
-            channel = await safely_get_channel(FACEBOOK_CHANNEL_ID)
-            if channel:
-                message = data.get('message', 'منشور جديد بدون نص').strip() or 'منشور جديد بدون نص'
-                post_url = data.get('url', '').strip()
-                image_url = data.get('image_url', '').strip()
-
-                embed = discord.Embed(
-                    title="🔵 منشور فيسبوك جديد",
-                    description=f"{RTL}{message}" + (f"\n\n🔗 [عرض المنشور]({post_url})" if post_url else ""),
-                    color=0x1877F2,
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-                if image_url and image_url.startswith("http"):
-                    embed.set_image(url=image_url)
-                embed.set_footer(text=f"{LRM}Gestax Facebook Monitor{LRM}")
-                await channel.send(embed=embed)
-                return web.json_response({"status": "success"}, status=200)
-
-        # إذا كان المصدر غير معروف أو القناة لم يتم تحديدها في .env
-        logger.warning(f"⚠️ مصدر غير معروف أو قناة غير مهيأة للمصدر: {source}")
-        return web.json_response({"status": "ignored", "message": "Source unknown or channel configuration missing"}, status=400)
+        return web.json_response({"status": "ignored", "message": "Source unknown or channel missing"}, status=400)
 
     except Exception as e:
         logger.error(f"❌ خطأ حرج غير متوقع داخل الـ Webhook Handler: {e}", exc_info=True)
@@ -160,7 +206,7 @@ async def handle_webhook(request):
 async def start_web_server():
     app = web.Application()
     app.router.add_post('/webhook/{source}', handle_webhook)
-    app.router.add_get('/', lambda r: web.Response(text="Gestax API Gateway is fully operational! 🚀", status=200))
+    app.router.add_get('/', lambda r: web.Response(text="Gestax API Gateway is Operational! 🚀", status=200))
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -171,12 +217,19 @@ async def start_web_server():
 
 async def setup_hook():
     bot.loop.create_task(start_web_server())
+    bot.add_view(MeetingView())
+    bot.add_view(AnnouncementView())
 
 bot.setup_hook = setup_hook
 
 @bot.event
 async def on_ready():
     logger.info(f"🔥 تم تسجيل الدخول بنجاح! البوت أونلاين: {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"⚡ [Global Sync] تم مزامنة {len(synced)} من أوامر السلاش بنجاح!")
+    except Exception as e:
+        logger.error(f"❌ فشل مزامنة أوامر السلاش: {e}")
 
 if __name__ == "__main__":
     if not TOKEN:
