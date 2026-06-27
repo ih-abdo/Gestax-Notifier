@@ -19,9 +19,10 @@ EMAIL_CHANNEL_ID = int(os.getenv("CHANNEL_EMAIL_ID", 0))
 INSTAGRAM_CHANNEL_ID = int(os.getenv("CHANNEL_INSTAGRAM_ID", 0))
 FACEBOOK_CHANNEL_ID = int(os.getenv("CHANNEL_FACEBOOK_ID", 0))
 
-# القنوات الجديدة المخصصة لإرسال المحاضر والإعلانات
+# القنوات الجديدة المخصصة لإرسال المحاضر والإعلانات وطلبات الميزات
 MEETINGS_CHANNEL_ID = int(os.getenv("CHANNEL_MEETINGS_ID", 0))
 ANNOUNCEMENTS_CHANNEL_ID = int(os.getenv("CHANNEL_ANNOUNCEMENTS_ID", 0))
+FEATURE_REQUESTS_CHANNEL_ID = int(os.getenv("CHANNEL_FEATURE_REQUESTS_ID", 0)) # المتغير الجديد
 
 intents = discord.Intents.default()
 intents.message_content = True  
@@ -151,6 +152,37 @@ class AnnouncementView(ui.View):
         await interaction.response.send_modal(AnnouncementModal(urgency_val=selected_urgency))
 
 # ========================================================
+# 💡 واجهات طلب الميزات (الإضافة الجديدة)
+# ========================================================
+class FeatureRequestModal(ui.Modal, title='💡 استمارة طلب ميزة جديدة'):
+    feature_title = ui.TextInput(label='اسم الميزة المقترحة', style=discord.TextStyle.short, required=True, max_length=100)
+    feature_desc = ui.TextInput(label='وصف الميزة ولماذا نحتاجها؟', style=discord.TextStyle.paragraph, required=True, max_length=2000)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=f"💡 طلب ميزة جديدة: {self.feature_title.value}",
+            color=0x2ECC71, # اللون الأخضر
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.add_field(name="التفاصيل", value=f"```\n{self.feature_desc.value}\n```", inline=False)
+        embed.set_footer(text=f"مُقدم الطلب: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+        
+        channel = await safely_get_channel(FEATURE_REQUESTS_CHANNEL_ID)
+        if channel:
+            await channel.send(embed=embed)
+            await interaction.response.send_message("✅ تم إرسال طلب الميزة بنجاح. شكراً لمساهمتك!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ لم يتم العثور على قناة طلبات الميزات. يرجى التحقق من إعدادات ملف .env.", ephemeral=True)
+
+class FeatureRequestView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="تقديم طلب ميزة 💡", style=discord.ButtonStyle.success, custom_id="btn_create_feature_request")
+    async def create_feature_request(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(FeatureRequestModal())
+
+# ========================================================
 # 💻 أوامر السلاش (Slash Commands)
 # ========================================================
 @bot.tree.command(name="setup_meetings", description="نشر قائمة تدوين محاضر الاجتماعات (للمسؤولين فقط)")
@@ -174,6 +206,18 @@ async def setup_announcements_slash(interaction: discord.Interaction):
     )
     await interaction.channel.send(embed=embed, view=AnnouncementView())
     await interaction.response.send_message("✅ تم نشر بوابة الإعلانات الإدارية بنجاح.", ephemeral=True)
+
+# الأمر الجديد الخاص بطلبات الميزات
+@bot.tree.command(name="setup_feature_requests", description="نشر زر تقديم طلب ميزات (للمسؤولين فقط)")
+@app_commands.default_permissions(administrator=True)
+async def setup_feature_requests_slash(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="💡 صندوق طلبات الميزات",
+        description="هل لديك فكرة رائعة لتحسين المشروع؟\nاضغط على الزر أدناه لتعبئة الاستمارة وسيقوم الفريق البرمجي بمراجعتها.",
+        color=0x2ECC71
+    )
+    await interaction.channel.send(embed=embed, view=FeatureRequestView())
+    await interaction.response.send_message("✅ تم نشر بوابة طلب الميزات بنجاح.", ephemeral=True)
 
 # ========================================================
 # 🌐 مستقبل الويب هوك (API Endpoint)
@@ -253,6 +297,7 @@ async def setup_hook():
     bot.loop.create_task(start_web_server())
     bot.add_view(MeetingView())
     bot.add_view(AnnouncementView())
+    bot.add_view(FeatureRequestView()) # تم تسجيل الزر الجديد هنا ليعمل دائماً
 
 bot.setup_hook = setup_hook
 
