@@ -159,12 +159,16 @@ class FeatureRequestModal(ui.Modal, title='💡 استمارة طلب ميزة �
     feature_desc = ui.TextInput(label='وصف الميزة ولماذا نحتاجها؟', style=discord.TextStyle.paragraph, required=True, max_length=2000)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # إضافة رمز الـ RTL لجعل النص البرمجي يقرأ من اليمين لليسار حتى لو احتوى كلمات إنجليزية
+        safe_desc = f"{RTL}{self.feature_desc.value}"
+        
         embed = discord.Embed(
             title=f"💡 طلب ميزة جديدة: {self.feature_title.value}",
             color=0x2ECC71, # اللون الأخضر
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
-        embed.add_field(name="التفاصيل", value=f"```\n{self.feature_desc.value}\n```", inline=False)
+        # استبدل الحقل القديم بـ safe_desc لحل مشكلة التنسيق المعكوس
+        embed.add_field(name="التفاصيل", value=f"> {safe_desc}", inline=False)
         embed.set_footer(text=f"مُقدم الطلب: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
         
         channel = await safely_get_channel(FEATURE_REQUESTS_CHANNEL_ID)
@@ -173,7 +177,6 @@ class FeatureRequestModal(ui.Modal, title='💡 استمارة طلب ميزة �
             await interaction.response.send_message("✅ تم إرسال طلب الميزة بنجاح. شكراً لمساهمتك!", ephemeral=True)
         else:
             await interaction.response.send_message("❌ لم يتم العثور على قناة طلبات الميزات. يرجى التحقق من إعدادات ملف .env.", ephemeral=True)
-
 class FeatureRequestView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
